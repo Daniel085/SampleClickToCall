@@ -1,0 +1,13 @@
+services:
+  asterisk:
+    image: andrius/asterisk:21-current
+    container_name: softphone-pbx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./config/pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./config/extensions.conf:/etc/asterisk/extensions.conf:ro
+      - ./config/http.conf:/etc/asterisk/http.conf:ro
+      - ./config/rtp.conf:/etc/asterisk/rtp.conf:ro
+      - ./config/modules.conf:/etc/asterisk/modules.conf:ro
+      - ./config/logger.conf:/etc/asterisk/logger.conf:ro

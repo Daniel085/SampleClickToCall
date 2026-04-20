@@ -8,32 +8,37 @@ import {
   UserAgent,
   UserAgentOptions,
 } from "sip.js";
-import type { SipConfig } from "./config";
+import { DEFAULT_ICE_SERVERS, type SipConfig } from "./config";
+import {
+  resolveTargetUri,
+  type CallInfo,
+  type CallRecord,
+  type CallState,
+  type Listener,
+  type RegistrationStatus,
+  type SipClientLike,
+} from "./types";
+import { VolumeMeter } from "./volume";
 
-export type RegistrationStatus = "offline" | "registering" | "registered" | "failed";
+const HISTORY_KEY = "sip-call-history";
+const HISTORY_LIMIT = 50;
 
-export type CallState = "idle" | "ringing-outbound" | "ringing-inbound" | "in-call" | "ended";
-
-export interface CallInfo {
-  peer: string;
-  direction: "inbound" | "outbound";
-  startedAt?: number;
-}
-
-type Listener<T> = (value: T) => void;
-
-export class SipClient {
+export class SipClient implements SipClientLike {
   private ua: UserAgent | null = null;
   private registerer: Registerer | null = null;
   private session: Session | null = null;
   private remoteAudio: HTMLAudioElement;
+  private currentConfig: SipConfig | null = null;
+  private volumeMeter = new VolumeMeter();
 
   private regStatus: RegistrationStatus = "offline";
   private callState: CallState = "idle";
   private callInfo: CallInfo | null = null;
+  private history: CallRecord[] = loadHistory();
 
   private regListeners = new Set<Listener<RegistrationStatus>>();
   private callListeners = new Set<Listener<{ state: CallState; info: CallInfo | null }>>();
+  private historyListeners = new Set<Listener<CallRecord[]>>();
 
   constructor(remoteAudio: HTMLAudioElement) {
     this.remoteAudio = remoteAudio;
@@ -51,6 +56,16 @@ export class SipClient {
     return () => this.callListeners.delete(fn);
   }
 
+  onCallHistory(fn: Listener<CallRecord[]>): () => void {
+    this.historyListeners.add(fn);
+    fn(this.history);
+    return () => this.historyListeners.delete(fn);
+  }
+
+  onVolume(fn: Listener<number>): () => void {
+    return this.volumeMeter.onVolume(fn);
+  }
+
   hasActiveSession(): boolean {
     return this.session !== null;
   }
@@ -66,8 +81,15 @@ export class SipClient {
     this.callListeners.forEach((fn) => fn({ state, info }));
   }
 
+  private pushHistory(record: CallRecord): void {
+    this.history = [record, ...this.history].slice(0, HISTORY_LIMIT);
+    saveHistory(this.history);
+    this.historyListeners.forEach((fn) => fn(this.history));
+  }
+
   async connect(cfg: SipConfig): Promise<void> {
     if (this.ua) await this.disconnect();
+    this.currentConfig = cfg;
 
     const uri = UserAgent.makeURI(cfg.sipUri);
     if (!uri) throw new Error(`Invalid SIP URI: ${cfg.sipUri}`);
@@ -78,6 +100,12 @@ export class SipClient {
       authorizationPassword: cfg.password,
       displayName: cfg.displayName,
       transportOptions: { server: cfg.wsUri },
+      sessionDescriptionHandlerFactoryOptions: {
+        iceGatheringTimeout: 2000,
+        peerConnectionConfiguration: {
+          iceServers: cfg.iceServers?.length ? cfg.iceServers : DEFAULT_ICE_SERVERS,
+        },
+      },
       delegate: {
         onInvite: (invitation) => this.handleInboundInvite(invitation),
       },
@@ -117,12 +145,15 @@ export class SipClient {
     if (!this.ua) throw new Error("Not registered");
     if (this.session) throw new Error("Call already in progress");
 
-    const targetUri = this.resolveTargetUri(target);
+    const localDomain = this.ua.configuration.uri?.host;
+    const resolved = resolveTargetUri(target, localDomain);
+    if (!resolved) throw new Error(`Invalid dial target: ${target}`);
+    const targetUri = UserAgent.makeURI(resolved);
     if (!targetUri) throw new Error(`Invalid dial target: ${target}`);
 
     const inviter = new Inviter(this.ua, targetUri, {
       sessionDescriptionHandlerOptions: {
-        constraints: { audio: true, video: false },
+        constraints: this.buildConstraints(),
       },
     });
 
@@ -136,7 +167,7 @@ export class SipClient {
     if (!invitation || !("accept" in invitation)) throw new Error("No inbound call to answer");
     await invitation.accept({
       sessionDescriptionHandlerOptions: {
-        constraints: { audio: true, video: false },
+        constraints: this.buildConstraints(),
       },
     });
   }
@@ -184,6 +215,35 @@ export class SipClient {
     sender?.dtmf?.insertDTMF(tone, 200, 50);
   }
 
+  async setInputDevice(deviceId: string): Promise<void> {
+    if (this.currentConfig) this.currentConfig.inputDeviceId = deviceId;
+    const pc = this.getPeerConnection();
+    if (!pc) return;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+      video: false,
+    });
+    const newTrack = stream.getAudioTracks()[0];
+    const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
+    if (sender && newTrack) await sender.replaceTrack(newTrack);
+  }
+
+  async setOutputDevice(deviceId: string): Promise<void> {
+    if (this.currentConfig) this.currentConfig.outputDeviceId = deviceId;
+    const audio = this.remoteAudio as HTMLAudioElement & {
+      setSinkId?: (id: string) => Promise<void>;
+    };
+    if (audio.setSinkId) await audio.setSinkId(deviceId);
+  }
+
+  private buildConstraints(): MediaStreamConstraints {
+    const deviceId = this.currentConfig?.inputDeviceId;
+    return {
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      video: false,
+    };
+  }
+
   private handleInboundInvite(invitation: Invitation): void {
     if (this.session) {
       invitation.reject().catch(() => undefined);
@@ -197,21 +257,36 @@ export class SipClient {
   private attachSession(session: Session, info: CallInfo): void {
     this.session = session;
     this.callInfo = info;
+    const createdAt = Date.now();
+    let connected = false;
+    let startedAt = createdAt;
 
     session.stateChange.addListener((state) => {
       switch (state) {
         case SessionState.Established:
+          connected = true;
+          startedAt = Date.now();
           this.setupRemoteMedia();
-          this.setCallState("in-call", { ...info, startedAt: Date.now() });
+          this.setCallState("in-call", { ...info, startedAt });
           break;
-        case SessionState.Terminated:
+        case SessionState.Terminated: {
           this.teardownRemoteMedia();
+          const endedAt = Date.now();
+          this.pushHistory({
+            peer: info.peer,
+            direction: info.direction,
+            startedAt: connected ? startedAt : createdAt,
+            endedAt,
+            durationSec: connected ? Math.round((endedAt - startedAt) / 1000) : 0,
+            connected,
+          });
           this.session = null;
           this.setCallState("ended", null);
           setTimeout(() => {
             if (this.callState === "ended") this.setCallState("idle", null);
           }, 1500);
           break;
+        }
         default:
           break;
       }
@@ -227,10 +302,15 @@ export class SipClient {
     });
     this.remoteAudio.srcObject = remoteStream;
     this.remoteAudio.play().catch(() => undefined);
+    this.volumeMeter.attach(remoteStream);
+
+    const outputId = this.currentConfig?.outputDeviceId;
+    if (outputId) this.setOutputDevice(outputId).catch(() => undefined);
   }
 
   private teardownRemoteMedia(): void {
     this.remoteAudio.srcObject = null;
+    this.volumeMeter.detach();
   }
 
   private getPeerConnection(): RTCPeerConnection | null {
@@ -239,15 +319,21 @@ export class SipClient {
       | undefined;
     return sdh?.peerConnection ?? null;
   }
+}
 
-  private resolveTargetUri(target: string): ReturnType<typeof UserAgent.makeURI> | undefined {
-    const trimmed = target.trim();
-    if (!trimmed) return undefined;
-    if (trimmed.startsWith("sip:") || trimmed.startsWith("sips:")) {
-      return UserAgent.makeURI(trimmed);
-    }
-    const localDomain = this.ua?.configuration.uri?.host;
-    if (!localDomain) return undefined;
-    return UserAgent.makeURI(`sip:${trimmed}@${localDomain}`);
+function loadHistory(): CallRecord[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as CallRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history: CallRecord[]): void {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // ignore quota
   }
 }

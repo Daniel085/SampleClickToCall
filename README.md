@@ -1,20 +1,27 @@
 # Sample Click-to-Call
 
-A basic web-based SIP softphone built with [SIP.js](https://sipjs.com/) and WebRTC. Register to any SIP provider that supports SIP-over-WebSocket (WSS), place and receive audio calls from the browser.
+A web-based SIP softphone built with [SIP.js](https://sipjs.com/) and WebRTC. Register to any SIP provider that speaks SIP-over-WebSocket, place and receive audio calls from the browser.
 
-## Features (MVP)
+## Features
 
 - Register / unregister against a SIP account over WSS
 - Outbound calls via dial pad
 - Inbound calls with ring tone, answer / reject
-- In-call: hangup, mute, DTMF keypad (RFC 4733)
-- Call state UI with duration timer
-- Credentials persisted in `localStorage` (dev only)
+- In-call controls: hangup, mute, DTMF (RFC 4733)
+- Live call duration + volume meter
+- Call history (persisted in `localStorage`)
+- Audio device picker (mic + speaker)
+- STUN + TURN server configuration
+- **Mock mode** — full UI without a real SIP account
+- Keyboard shortcuts: Enter to dial, Esc to hangup
+- Toast error surface
+- Unit tests (Vitest)
+- Disposable Asterisk PBX in Docker for local testing
 
 ## Stack
 
-- Vite + TypeScript (vanilla — no framework)
-- SIP.js for SIP signaling
+- Vite + TypeScript (vanilla, no framework)
+- SIP.js for SIP signaling over WebSocket
 - Browser WebRTC for media (Opus, echo cancellation, ICE)
 
 ## Getting started
@@ -24,19 +31,34 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173, fill the account form, click **Register**.
+Open http://localhost:5173.
 
-## SIP provider requirements
+### Run without a real SIP account
 
-Your provider / PBX must expose **SIP over WebSocket (WSS)**. Examples:
+Append `?mock=1` to the URL (or set `localStorage.sip-mock = "1"`). You'll get:
 
-- **Asterisk** — enable `chan_pjsip` with `transport=wss`
-- **FreeSWITCH** — enable WSS in `sofia.conf.xml`
-- **Kamailio / OpenSIPS** — enable the `websocket` module
-- **Twilio Programmable Voice** — use the SIP.js + Twilio Client guide
-- **Telnyx** — WebRTC credentials from the portal
+- Fake registration (300ms)
+- A simulated inbound call 15s after registering
+- Fake outbound "connect" after 1.2s
+- Fake volume meter activity
+- Full state machine, timers, history, mute, hangup, reject
 
-Fields:
+No SIP traffic is sent.
+
+### Run against a local Asterisk PBX
+
+Spin up a throwaway PBX:
+
+```bash
+cd docker/pbx
+docker compose up -d
+```
+
+See [docker/pbx/README.md](docker/pbx/README.md) for extension credentials. Register two browser tabs to dial between them, or dial `600` for an echo test.
+
+### Run against a real SIP provider
+
+Your provider must expose **SIP over WebSocket (WSS)**. Examples: Asterisk/FreeSWITCH/Kamailio with WS(S) enabled, Twilio Programmable Voice, Telnyx WebRTC.
 
 | Field | Example |
 |---|---|
@@ -45,30 +67,67 @@ Fields:
 | Auth user | `alice` |
 | Password | *** |
 
+Expand **Advanced (ICE / TURN)** to add a TURN server if calls stall on NAT.
+
 ## Dialing
 
 - Full URI: `sip:bob@example.com`
-- Extension / number: `1001` or `+15551234567` (resolved against the registered domain)
+- Bare extension / number: `1001` (resolved against the registered domain)
+
+Press **Enter** in the dial input to call; press **Esc** during a call to hang up.
+
+## Scripts
+
+```bash
+npm run dev          # Vite dev server
+npm run build        # tsc + vite build → dist/
+npm test             # run unit tests (Vitest)
+npm run test:watch   # watch mode
+```
+
+## Deployment
+
+### Docker (nginx)
+
+```bash
+docker build -t click-to-call .
+docker run -p 8080:80 click-to-call
+```
+
+### GitHub Pages
+
+Pushing to `main` triggers `.github/workflows/deploy.yml`, which builds and publishes to Pages with base path `/SampleClickToCall/`.
+
+## Project layout
+
+```
+index.html             # app shell
+styles.css             # theme + layout
+src/
+  main.ts              # bootstrap + mock toggle
+  sip.ts               # real SIP.js UserAgent wrapper
+  mock.ts              # FakeSipClient (mock mode)
+  types.ts             # SipClientLike interface, pure resolver
+  ui.ts                # DOM wiring, state, shortcuts
+  audio.ts             # ring tone generator
+  volume.ts            # RMS volume meter
+  devices.ts           # audio device enumeration
+  toast.ts             # toast notifications
+  config.ts            # localStorage creds + TURN
+tests/                 # Vitest suites
+docker/
+  pbx/                 # local Asterisk PBX (compose)
+  nginx.conf           # serving config for the app image
+Dockerfile             # build + nginx image
+.github/workflows/     # CI + Pages deploy
+```
 
 ## Scope / non-goals
 
-Out of scope for this MVP: call hold, transfer, conferencing, video, call history, contacts, TURN auth, multi-line, presence/BLF, push notifications.
+Out of scope for this version: call hold, transfer, conferencing, video, multi-line, presence/BLF, push notifications, contacts directory, server-side credential proxy.
 
 ## Security notes
 
-- Credentials live in `localStorage` — fine for local development, **not** for production. For production, proxy auth via a backend and issue short-lived SIP tokens.
-- WSS + SRTP (browser-mandatory) give encrypted signaling and media.
-- Behind symmetric NAT you will need a TURN server (wire it into `UserAgentOptions.sessionDescriptionHandlerFactoryOptions.iceServers`).
-
-## Layout
-
-```
-index.html          # app shell
-styles.css          # theme + layout
-src/
-  main.ts           # bootstrap
-  sip.ts            # SIP.js UserAgent wrapper
-  ui.ts             # DOM wiring + state
-  audio.ts          # ring tone generator
-  config.ts         # localStorage creds
-```
+- Credentials live in `localStorage` — fine for local dev, **not** for production. For production, proxy auth via a backend and issue short-lived SIP tokens.
+- WSS + SRTP (browser-mandatory) give encrypted signaling and media in production.
+- Behind symmetric NAT you will need a TURN server.

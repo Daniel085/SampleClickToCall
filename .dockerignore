@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.github
+docker
+tests
+*.log
+.DS_Store
+.vite

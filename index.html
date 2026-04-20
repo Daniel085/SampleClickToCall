@@ -13,6 +13,8 @@
         <span id="status" class="status status-offline">Offline</span>
       </header>
 
+      <div id="mock-banner" class="banner hidden">Mock mode — no real SIP traffic.</div>
+
       <section id="config-panel" class="panel">
         <h2>Account</h2>
         <form id="config-form">
@@ -36,11 +38,45 @@
             Display name (optional)
             <input id="cfg-name" type="text" placeholder="Alice" />
           </label>
+          <details>
+            <summary>Advanced (ICE / TURN)</summary>
+            <label>
+              STUN URL
+              <input id="cfg-stun" type="text" placeholder="stun:stun.l.google.com:19302" />
+            </label>
+            <label>
+              TURN URL
+              <input id="cfg-turn" type="text" placeholder="turn:turn.example.com:3478" />
+            </label>
+            <label>
+              TURN user
+              <input id="cfg-turn-user" type="text" />
+            </label>
+            <label>
+              TURN password
+              <input id="cfg-turn-pass" type="password" />
+            </label>
+          </details>
           <div class="row">
             <button type="submit" id="btn-register">Register</button>
             <button type="button" id="btn-unregister" disabled>Unregister</button>
           </div>
         </form>
+      </section>
+
+      <section id="devices-panel" class="panel">
+        <h2>Audio devices</h2>
+        <label>
+          Microphone
+          <select id="dev-input"></select>
+        </label>
+        <label>
+          Speaker
+          <select id="dev-output"></select>
+        </label>
+        <div class="row">
+          <button type="button" id="btn-grant-mic">Grant mic access</button>
+        </div>
       </section>
 
       <section id="dialer-panel" class="panel">
@@ -55,18 +91,25 @@
         <div class="row">
           <button id="btn-call" disabled>Call</button>
         </div>
+        <p class="hint">Enter to dial, Esc to hangup.</p>
       </section>
 
       <section id="call-panel" class="panel hidden">
         <h2 id="call-state">Idle</h2>
         <p id="call-peer"></p>
         <p id="call-timer">00:00</p>
+        <div class="volume-bar"><div id="volume-fill"></div></div>
         <div class="row">
           <button id="btn-answer" class="hidden">Answer</button>
           <button id="btn-reject" class="hidden">Reject</button>
           <button id="btn-hangup" class="hidden">Hangup</button>
           <button id="btn-mute" class="hidden">Mute</button>
         </div>
+      </section>
+
+      <section id="history-panel" class="panel">
+        <h2>Call history</h2>
+        <ul id="history-list"></ul>
       </section>
 
       <audio id="remote-audio" autoplay></audio>
