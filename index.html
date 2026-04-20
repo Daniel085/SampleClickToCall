@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sample Click-to-Call</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <header>
+        <h1>Click-to-Call</h1>
+        <span id="status" class="status status-offline">Offline</span>
+      </header>
+
+      <section id="config-panel" class="panel">
+        <h2>Account</h2>
+        <form id="config-form">
+          <label>
+            WebSocket URI
+            <input id="cfg-ws" type="url" placeholder="wss://sip.example.com:7443/ws" required />
+          </label>
+          <label>
+            SIP URI
+            <input id="cfg-uri" type="text" placeholder="sip:alice@example.com" required />
+          </label>
+          <label>
+            Auth user
+            <input id="cfg-user" type="text" placeholder="alice" required />
+          </label>
+          <label>
+            Password
+            <input id="cfg-pass" type="password" required />
+          </label>
+          <label>
+            Display name (optional)
+            <input id="cfg-name" type="text" placeholder="Alice" />
+          </label>
+          <div class="row">
+            <button type="submit" id="btn-register">Register</button>
+            <button type="button" id="btn-unregister" disabled>Unregister</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="dialer-panel" class="panel">
+        <h2>Dialer</h2>
+        <input id="dial-input" type="text" placeholder="+15551234567 or alice" />
+        <div class="keypad">
+          <button data-dtmf="1">1</button><button data-dtmf="2">2</button><button data-dtmf="3">3</button>
+          <button data-dtmf="4">4</button><button data-dtmf="5">5</button><button data-dtmf="6">6</button>
+          <button data-dtmf="7">7</button><button data-dtmf="8">8</button><button data-dtmf="9">9</button>
+          <button data-dtmf="*">*</button><button data-dtmf="0">0</button><button data-dtmf="#">#</button>
+        </div>
+        <div class="row">
+          <button id="btn-call" disabled>Call</button>
+        </div>
+      </section>
+
+      <section id="call-panel" class="panel hidden">
+        <h2 id="call-state">Idle</h2>
+        <p id="call-peer"></p>
+        <p id="call-timer">00:00</p>
+        <div class="row">
+          <button id="btn-answer" class="hidden">Answer</button>
+          <button id="btn-reject" class="hidden">Reject</button>
+          <button id="btn-hangup" class="hidden">Hangup</button>
+          <button id="btn-mute" class="hidden">Mute</button>
+        </div>
+      </section>
+
+      <audio id="remote-audio" autoplay></audio>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
